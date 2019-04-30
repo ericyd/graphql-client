@@ -29,7 +29,7 @@ module GraphQL
 
     extend CollocatedEnforcement
 
-    attr_reader :schema, :execute
+    attr_reader :schema, :execute, :validate_schema
 
     attr_reader :types
 
@@ -90,13 +90,14 @@ module GraphQL
       result
     end
 
-    def initialize(schema:, execute: nil, enforce_collocated_callers: false)
+    def initialize(schema:, execute: nil, enforce_collocated_callers: false, validate_schema: true)
       @schema = self.class.load_schema(schema)
       @execute = execute
       @document = GraphQL::Language::Nodes::Document.new(definitions: [])
       @document_tracking_enabled = false
       @allow_dynamic_queries = false
       @enforce_collocated_callers = enforce_collocated_callers
+      @validate_schema = validate_schema
 
       @types = Schema.generate(@schema)
     end
@@ -184,20 +185,22 @@ module GraphQL
 
       document_dependencies = Language::Nodes::Document.new(definitions: doc.definitions + definition_dependencies.to_a)
 
-      rules = GraphQL::StaticValidation::ALL_RULES - [
-        GraphQL::StaticValidation::FragmentsAreUsed,
-        GraphQL::StaticValidation::FieldsHaveAppropriateSelections
-      ]
-      validator = GraphQL::StaticValidation::Validator.new(schema: self.schema, rules: rules)
-      query = GraphQL::Query.new(self.schema, document: document_dependencies)
+      if validate_schema
+        rules = GraphQL::StaticValidation::ALL_RULES - [
+          GraphQL::StaticValidation::FragmentsAreUsed,
+          GraphQL::StaticValidation::FieldsHaveAppropriateSelections
+        ]
+        validator = GraphQL::StaticValidation::Validator.new(schema: self.schema, rules: rules)
+        query = GraphQL::Query.new(self.schema, document: document_dependencies)
 
-      errors = validator.validate(query)
-      errors.fetch(:errors).each do |error|
-        error_hash = error.to_h
-        validation_line = error_hash["locations"][0]["line"]
-        error = ValidationError.new(error_hash["message"])
-        error.set_backtrace(["#{filename}:#{lineno + validation_line}"] + caller)
-        raise error
+        errors = validator.validate(query)
+        errors.fetch(:errors).each do |error|
+          error_hash = error.to_h
+          validation_line = error_hash["locations"][0]["line"]
+          error = ValidationError.new(error_hash["message"])
+          error.set_backtrace(["#{filename}:#{lineno + validation_line}"] + caller)
+          raise error
+        end
       end
 
       definitions = {}
